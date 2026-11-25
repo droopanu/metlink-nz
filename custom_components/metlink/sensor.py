@@ -71,10 +71,15 @@ from .const import (
     ATTR_VEHICLE,
     ATTRIBUTION,
     CONF_DEST,
+    CONF_FAST_POLL_ENTITY,
+    CONF_FAST_POLL_SECONDS,
+    CONF_FAST_POLL_WINDOW,
     CONF_NUM_DEPARTURES,
     CONF_ROUTE,
     CONF_STOP_ID,
     CONF_STOPS,
+    DEFAULT_FAST_POLL_SECONDS,
+    DEFAULT_FAST_POLL_WINDOW,
     DOMAIN,
     LANG,
 )
@@ -121,7 +126,12 @@ async def async_setup_entry(
         config.update(config_entry.options)
     session = async_get_clientsession(hass)
     metlink = Metlink(session, config[CONF_API_KEY])
-    sensors = [MetlinkSensor(metlink, stop) for stop in config[CONF_STOPS]]
+    polling = {
+        key: config[key]
+        for key in (CONF_FAST_POLL_ENTITY, CONF_FAST_POLL_SECONDS, CONF_FAST_POLL_WINDOW)
+        if config.get(key) not in (None, "")
+    }
+    sensors = [MetlinkSensor(metlink, stop, polling) for stop in config[CONF_STOPS]]
     async_add_entities(sensors, update_before_add=True)
 
 
@@ -169,8 +179,24 @@ def get_translation(translations: Dict) -> str:
 class MetlinkSensor(Entity):
     """Representation of a Metlink Stop sensor."""
 
-    def __init__(self, metlink: Metlink, stop: Dict[str, str]):
+    def __init__(
+        self,
+        metlink: Metlink,
+        stop: Dict[str, str],
+        polling: Optional[Dict[str, Any]] = None,
+    ):
         super().__init__()
+        polling = polling or {}
+        # Optional fast polling: while this entity is "on", departures within
+        # the window are refreshed every fast_poll_seconds.
+        self.fast_poll_entity = polling.get(CONF_FAST_POLL_ENTITY)
+        self.fast_poll_interval = timedelta(
+            seconds=polling.get(CONF_FAST_POLL_SECONDS, DEFAULT_FAST_POLL_SECONDS)
+        )
+        self.fast_poll_window = timedelta(
+            minutes=polling.get(CONF_FAST_POLL_WINDOW, DEFAULT_FAST_POLL_WINDOW)
+        )
+        self.last_success = None
         self.metlink = metlink
         self.stop_id = stop[CONF_STOP_ID]
         self.route_filter = stop.get(CONF_ROUTE, None)
@@ -225,12 +251,24 @@ class MetlinkSensor(Entity):
     def extra_state_attributes(self) -> Dict[str, Any]:
         return self.attrs
 
+    def _fast_poll_due(self, now) -> bool:
+        """True when fast polling is active and a refresh is due now."""
+        if not self.fast_poll_entity or self.hass is None:
+            return False
+        control = self.hass.states.get(self.fast_poll_entity)
+        if control is None or control.state != "on":
+            return False
+        if self.last_success is not None and now - self.last_success < self.fast_poll_interval:
+            return False
+        # Refresh when the next departure is inside the window, or unknown.
+        return self._state is None or self._state - now <= self.fast_poll_window
+
     async def async_update(self):
         # Only poll the API if it is time to do so
         now = dt_util.as_local(dt_util.utcnow())
         if self.retry_at is not None and self.retry_at > now:
             return
-        if self.update_time > now:
+        if self.update_time > now and not self._fast_poll_due(now):
             return
 
         num = 0
@@ -409,6 +447,8 @@ class MetlinkSensor(Entity):
 
                     for attr in to_remove:
                         self.attrs.pop(attr)
+
+            self.last_success = now
 
         except MetlinkRateLimited as ex:
             self.retry_at = ex.retry_at

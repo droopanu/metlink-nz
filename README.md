@@ -45,6 +45,19 @@ sense when there is more than one result being returned.
 If more than 1 result is requested in `num_departures`, the attributes
 will be suffixed with a number for second and subsequent departures.
 
+## Fast polling (optional)
+
+By default a stop is polled every 2 minutes when the next departure is
+within 15 minutes, every 10 minutes within the hour, and not at all when it
+is further away. If you need fresher predictions at certain times (for
+example while you are leaving for work), open the integration's
+**Configure** dialog and choose a **fast polling control entity**, such as
+an `input_boolean` or a template `binary_sensor`. While that entity is
+`on`, any stop whose next departure is within the fast poll window
+(default 20 minutes) is refreshed every fast poll interval (default 60
+seconds). Clear the entity to switch fast polling off. Rate-limit pauses
+(see "Rate limits and errors") apply in fast mode too.
+
 Stop IDs sometimes behave differently, E.g. if your start stop ID is NAEN and the final destination is WELL, it doesn't work but it works with WELL1 as the final destination. To ensure that you have the correct final destination Stop ID, create a sensor without a final destination and get the final destination which shows up in the attributes.
 
 ### Rate limits and errors

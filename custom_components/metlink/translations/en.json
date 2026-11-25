@@ -29,13 +29,16 @@
 	"step": {
 	    "init": {
 		"title": "Manage Stops",
-		"description": "Add or remove stops.",
+		"description": "Add or remove stops. Optionally, choose an on/off entity that turns on faster polling: while it is on, stops with a departure inside the window are refreshed every fast poll interval.",
 		"data": {
 		    "stops": "Existing stops (unselect to remove)",
 		    "stop_id": "3 to 4 digit or letter stop id.",
 		    "route": "(Optional) Route filter.",
 		    "destination": "(Optional) Final destination filter.",
-		    "num_departures": "Number of departures to track. (Default: 1)"
+		    "num_departures": "Number of departures to track. (Default: 1)",
+		    "fast_poll_entity": "(Optional) Fast polling control entity (fast while it is on).",
+		    "fast_poll_seconds": "Fast poll interval in seconds, 30-600. (Default: 60)",
+		    "fast_poll_window_minutes": "Fast poll window in minutes before a departure, 1-120. (Default: 20)"
 		}
 	    }
 	}

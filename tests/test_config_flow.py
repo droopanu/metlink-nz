@@ -349,3 +349,87 @@ async def test_options_flow_add_stop(m_metlink, m_metlink_flow, hass):
     assert {CONF_STOPS: expected_stops} == result["data"]
     assert await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def _options_submit(hass, options, user_input):
+    """Set up an entry with `options`, submit the options form, return its data."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="metlink_1111",
+        data={CONF_API_KEY: "dummy", CONF_STOPS: [{CONF_STOP_ID: "1111"}]},
+        options=options,
+    )
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    _result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    with patch.object(hass.config_entries, "async_reload", AsyncMock(return_value=True)):
+        result = await hass.config_entries.options.async_configure(
+            _result["flow_id"], user_input=user_input
+        )
+    await hass.async_block_till_done()
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    return result["data"]
+
+
+POLLING = {
+    "fast_poll_entity": "input_boolean.commute",
+    "fast_poll_seconds": 60,
+    "fast_poll_window_minutes": 20,
+}
+
+
+@patch("custom_components.metlink.sensor.Metlink")
+async def test_options_polling_saved(m_metlink, hass):
+    """Polling options are saved alongside the stops."""
+    m_metlink.return_value = AsyncMock()
+    data = await _options_submit(
+        hass, {}, {CONF_STOPS: ["sensor.metlink_1111"], **POLLING}
+    )
+    assert data == {CONF_STOPS: [{CONF_STOP_ID: "1111"}], **POLLING}
+
+
+@patch("custom_components.metlink.sensor.Metlink")
+@patch("custom_components.metlink.config_flow.Metlink")
+async def test_options_stop_edit_keeps_polling(m_metlink_flow, m_metlink, hass):
+    """Adding a stop keeps the polling options the form shows (suggested values)."""
+    m_metlink.return_value = AsyncMock()
+    options = {CONF_STOPS: [{CONF_STOP_ID: "1111"}], **POLLING}
+    data = await _options_submit(
+        hass,
+        options,
+        {CONF_STOPS: ["sensor.metlink_1111"], CONF_STOP_ID: "WELL", **POLLING},
+    )
+    assert data[CONF_STOPS][-1][CONF_STOP_ID] == "WELL"
+    assert {k: data[k] for k in POLLING} == POLLING
+
+
+@patch("custom_components.metlink.sensor.Metlink")
+async def test_options_clear_entity_disables(m_metlink, hass):
+    """Leaving the control entity empty removes it, switching fast polling off."""
+    m_metlink.return_value = AsyncMock()
+    options = {CONF_STOPS: [{CONF_STOP_ID: "1111"}], **POLLING, "other": 1}
+    data = await _options_submit(
+        hass, options, {CONF_STOPS: ["sensor.metlink_1111"], "fast_poll_seconds": 90}
+    )
+    assert "fast_poll_entity" not in data
+    assert "fast_poll_window_minutes" not in data
+    assert data["fast_poll_seconds"] == 90
+    assert data["other"] == 1
+    assert data[CONF_STOPS] == [{CONF_STOP_ID: "1111"}]
+
+
+@patch("custom_components.metlink.sensor.MetlinkSensor")
+@patch("custom_components.metlink.sensor.Metlink")
+async def test_setup_passes_polling(m_metlink, m_sensor, hass):
+    """The entry's polling options reach every sensor."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_API_KEY: "dummy", CONF_STOPS: [{CONF_STOP_ID: "1111"}]},
+        options={CONF_STOPS: [{CONF_STOP_ID: "1111"}], **POLLING},
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert m_sensor.call_args.args[2] == POLLING

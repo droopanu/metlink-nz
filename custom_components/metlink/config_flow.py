@@ -23,6 +23,7 @@ from homeassistant.const import CONF_API_KEY
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import selector
 from homeassistant.helpers.entity_registry import (
     async_entries_for_config_entry,
     async_get,
@@ -32,6 +33,9 @@ import voluptuous as vol
 from .MetlinkAPI import Metlink, MetlinkRateLimited
 from .const import (
     CONF_DEST,
+    CONF_FAST_POLL_ENTITY,
+    CONF_FAST_POLL_SECONDS,
+    CONF_FAST_POLL_WINDOW,
     CONF_NUM_DEPARTURES,
     CONF_ROUTE,
     CONF_STOP_ID,
@@ -41,6 +45,8 @@ from .const import (
 from .sensor import metlink_unique_id
 
 _LOGGER = logging.getLogger(__name__)
+
+POLLING_OPTIONS = (CONF_FAST_POLL_ENTITY, CONF_FAST_POLL_SECONDS, CONF_FAST_POLL_WINDOW)
 
 AUTH_SCHEMA = vol.Schema({vol.Required(CONF_API_KEY): cv.string})
 STOP_SCHEMA = vol.Schema(
@@ -191,10 +197,20 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 )
 
             _LOGGER.debug(f"Reconfigured stops: {updated_stops}")
-            return self.async_create_entry(
-                title="",
-                data={CONF_STOPS: updated_stops},
-            )
+            # Keep any other saved options, replace the stops, and take the
+            # polling options from the form: a field left empty is removed,
+            # which is how fast polling is switched off.
+            options = {
+                k: v
+                for k, v in self._config_entry.options.items()
+                if k not in POLLING_OPTIONS
+            }
+            options[CONF_STOPS] = updated_stops
+            for key in POLLING_OPTIONS:
+                if user_input.get(key) not in (None, ""):
+                    value = user_input[key]
+                    options[key] = value if key == CONF_FAST_POLL_ENTITY else int(value)
+            return self.async_create_entry(title="", data=options)
 
         options_schema = vol.Schema(
             {
@@ -209,6 +225,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 ),
                 vol.Optional(CONF_DEST, default=""): cv.string,
                 vol.Optional(CONF_NUM_DEPARTURES, default=1): cv.positive_int,
+                vol.Optional(
+                    CONF_FAST_POLL_ENTITY,
+                    description={"suggested_value": config.get(CONF_FAST_POLL_ENTITY)},
+                ): selector.EntitySelector(),
+                vol.Optional(
+                    CONF_FAST_POLL_SECONDS,
+                    description={"suggested_value": config.get(CONF_FAST_POLL_SECONDS)},
+                ): vol.All(vol.Coerce(int), vol.Range(min=30, max=600)),
+                vol.Optional(
+                    CONF_FAST_POLL_WINDOW,
+                    description={"suggested_value": config.get(CONF_FAST_POLL_WINDOW)},
+                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
             }
         )
         _LOGGER.debug("Showing Reconfiguration form")

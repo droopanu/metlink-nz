@@ -21,6 +21,11 @@ CONF_STOP_ID = "stop_id"
 CONF_DEST = "destination"
 CONF_ROUTE = "route"
 CONF_NUM_DEPARTURES = "num_departures"
+CONF_FAST_POLL_ENTITY = "fast_poll_entity"
+CONF_FAST_POLL_SECONDS = "fast_poll_seconds"
+CONF_FAST_POLL_WINDOW = "fast_poll_window_minutes"
+DEFAULT_FAST_POLL_SECONDS = 60
+DEFAULT_FAST_POLL_WINDOW = 20
 
 ATTR_ACCESSIBLE = "wheelchair_accessible"
 ATTR_AIMED = "aimed"

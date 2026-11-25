@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiohttp import ClientResponseError
 import homeassistant.util.dt as dt_util
@@ -299,3 +299,85 @@ async def test_alerts_failure_keeps_departures(hass, aioclient_mock):
     assert sensor.available is True
     assert sensor.attrs["departure"] == "2021-04-29T21:44:00+12:00"
     assert sensor.attrs["alert_count"] == 0
+
+
+def _fast_sensor(hass, departures_at, control_state="on"):
+    """A sensor whose next departure is `departures_at`, with fast polling."""
+    response = {
+        "departures": [
+            dict(
+                TEST_RESPONSE[0]["departures"][0],
+                departure={"aimed": departures_at.isoformat(), "expected": None},
+            )
+        ]
+    }
+    metlink = MagicMock()
+    metlink.get_predictions = AsyncMock(return_value=response)
+    metlink.get_service_alerts = AsyncMock(return_value={"entity": []})
+    sensor = MetlinkSensor(
+        metlink,
+        {CONF_STOP_ID: "WELL"},
+        {"fast_poll_entity": "input_boolean.commute", "fast_poll_seconds": 60},
+    )
+    sensor.hass = hass
+    if control_state is not None:
+        hass.states.async_set("input_boolean.commute", control_state)
+    return sensor, metlink
+
+
+async def _two_updates(sensor, seconds_later):
+    await sensor.async_update()
+    later = dt_util.utcnow() + timedelta(seconds=seconds_later)
+    with patch("homeassistant.util.dt.utcnow", return_value=later):
+        await sensor.async_update()
+
+
+async def test_fast_poll_overrides_hold(hass):
+    """While the control entity is on, a departure in the window refreshes early."""
+    # 16 minutes away: the normal schedule would hold polling for 2 minutes.
+    sensor, metlink = _fast_sensor(hass, dt_util.now() + timedelta(minutes=16))
+    await _two_updates(sensor, 61)
+    assert metlink.get_predictions.call_count == 2
+
+
+async def test_fast_poll_respects_interval(hass):
+    """Fast polling still waits for the fast interval between fetches."""
+    sensor, metlink = _fast_sensor(hass, dt_util.now() + timedelta(minutes=16))
+    await _two_updates(sensor, 30)
+    assert metlink.get_predictions.call_count == 1
+
+
+async def test_fast_poll_off_keeps_schedule(hass):
+    """With the control entity off the normal schedule applies."""
+    sensor, metlink = _fast_sensor(hass, dt_util.now() + timedelta(minutes=16), "off")
+    await _two_updates(sensor, 61)
+    assert metlink.get_predictions.call_count == 1
+
+
+async def test_fast_poll_missing_entity_is_off(hass):
+    """A missing or unavailable control entity never enables fast polling."""
+    sensor, metlink = _fast_sensor(
+        hass, dt_util.now() + timedelta(minutes=16), control_state=None
+    )
+    await _two_updates(sensor, 61)
+    hass.states.async_set("input_boolean.commute", "unavailable")
+    await _two_updates(sensor, 61)
+    assert metlink.get_predictions.call_count == 1
+
+
+async def test_fast_poll_outside_window(hass):
+    """Departures beyond the window keep the normal schedule."""
+    sensor, metlink = _fast_sensor(hass, dt_util.now() + timedelta(minutes=45))
+    await _two_updates(sensor, 61)
+    assert metlink.get_predictions.call_count == 1
+
+
+async def test_backoff_beats_fast_poll(hass):
+    """An API back-off is honoured even when fast polling is due."""
+    sensor, metlink = _fast_sensor(hass, dt_util.now() + timedelta(minutes=16))
+    await sensor.async_update()
+    sensor.retry_at = dt_util.now() + timedelta(minutes=5)
+    later = dt_util.utcnow() + timedelta(seconds=61)
+    with patch("homeassistant.util.dt.utcnow", return_value=later):
+        await sensor.async_update()
+    assert metlink.get_predictions.call_count == 1
